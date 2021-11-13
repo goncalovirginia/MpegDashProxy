@@ -65,9 +65,7 @@ public class Main {
 				}
 			}
 			
-			System.out.println(bestTrack.filename());
-			
-			String bestTrackURL = MEDIA_SERVER_BASE_URL + "/" + manifest.name() + "/" + bestTrack.filename();
+			String bestTrackURL = MEDIA_SERVER_BASE_URL + "/" + movie + "/" + bestTrack.filename();
 			List<MovieManifest.Segment> segments = bestTrack.segments();
 			
 			for (MovieManifest.Segment segment : segments) {
