@@ -1,5 +1,6 @@
 package proxy;
 
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.BlockingQueue;
@@ -57,27 +58,92 @@ public class Main {
 		 */
 		public void run() {
 			List<MovieManifest.Track> tracks = manifest.tracks();
+			AverageKbps averageKbps = new AverageKbps(3);
+			int currentSegment = 0, numSegments = tracks.get(0).segments().size();
+			
+			MovieManifest.Track bestTrack = null;
+			
+			while (currentSegment < numSegments) {
+				MovieManifest.Track previousTrack = bestTrack;
+				bestTrack = bestTrack(averageKbps.calculate(), tracks);
+				
+				String bestTrackURL = MEDIA_SERVER_BASE_URL + "/" + movie + "/" + bestTrack.filename();
+				
+				if (previousTrack != null && !previousTrack.filename().equals(bestTrack.filename())) {
+					MovieManifest.Segment firstSegment = bestTrack.segments().get(0);
+					byte[] segmentData = http.doGetRange(bestTrackURL, firstSegment.offset(), firstSegment.offset() + firstSegment.length() - 1);
+					queueSegment(queue, bestTrack.contentType(), segmentData);
+				}
+				
+				MovieManifest.Segment segment = bestTrack.segments().get(currentSegment);
+				
+				long transferStart = System.nanoTime();
+				byte[] segmentData = http.doGetRange(bestTrackURL, segment.offset(), segment.offset() + segment.length() - 1);
+				double transferTimeSeconds = (System.nanoTime() - transferStart) / Math.pow(10.0, 9.0);
+				double transferKbps = (segmentData.length * 8) / (1000 * transferTimeSeconds);
+				averageKbps.add(transferKbps, currentSegment);
+				currentSegment++;
+				
+				queueSegment(queue, bestTrack.contentType(), segmentData);
+			}
+			
+			queue.add(new SegmentContent("", new byte[0]));
+		}
+		
+		private static void queueSegment(BlockingQueue<MovieManifest.SegmentContent> queue, String contentType, byte[] segmentData) {
+			try {
+				queue.put(new SegmentContent(contentType, segmentData));
+			}
+			catch (InterruptedException e) {
+				e.printStackTrace();
+			}
+		}
+		
+		private static MovieManifest.Track bestTrack(double averageKbps, List<MovieManifest.Track> tracks) {
 			MovieManifest.Track bestTrack = tracks.get(0);
 			
 			for (MovieManifest.Track track : tracks) {
-				if (track.avgBandwidth() > bestTrack.avgBandwidth()) {
+				if (Math.abs((track.avgBandwidth() / (double) 1000) - averageKbps) <
+						Math.abs((bestTrack.avgBandwidth() / (double) 1000) - averageKbps)) {
 					bestTrack = track;
 				}
 			}
 			
-			String bestTrackURL = MEDIA_SERVER_BASE_URL + "/" + movie + "/" + bestTrack.filename();
-			List<MovieManifest.Segment> segments = bestTrack.segments();
+			return bestTrack;
+		}
+		
+		private static class AverageKbps {
 			
-			for (MovieManifest.Segment segment : segments) {
-				byte[] segmentData = http.doGetRange(bestTrackURL, segment.offset(), segment.offset() + segment.length() - 1);
-				try {
-					queue.put(new SegmentContent(bestTrack.contentType(), segmentData));
-				}
-				catch (InterruptedException e) {
-					e.printStackTrace();
+			private int maxSaved, numSaved;
+			private double[] saved;
+			
+			private AverageKbps(int maxSaved) {
+				this.maxSaved = maxSaved;
+				numSaved = 0;
+				saved = new double[maxSaved];
+			}
+			
+			private void add(double kbps, int segmentNumber) {
+				saved[segmentNumber % maxSaved] = kbps;
+				
+				if (numSaved < maxSaved) {
+					numSaved++;
 				}
 			}
-			queue.add(new SegmentContent(bestTrack.contentType(), new byte[0]));
+			
+			private double calculate() {
+				if (numSaved == 0) {
+					return 0;
+				}
+				
+				double total = 0;
+				
+				for (int i = 0; i < numSaved; i++) {
+					total += saved[i];
+				}
+				
+				return total / numSaved;
+			}
 		}
 	}
 }
