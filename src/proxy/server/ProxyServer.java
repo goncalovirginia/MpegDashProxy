@@ -27,7 +27,7 @@ public class ProxyServer {
 
 	private static final int PROXY_SERVER_PORT = 1234;
 
-	public static void start( BiFunction<String, BlockingQueue<SegmentContent>, Runnable> factory ) {
+	public static void start(BiFunction<String, BlockingQueue<SegmentContent>, Runnable> factory) {
 		try (var ss = new ServerSocket(PROXY_SERVER_PORT)) {
 			System.err.printf("ProxyServer listening on port %s\n", ss.getLocalPort());
 			for (;;) {
@@ -56,7 +56,12 @@ class Player {
 
 	private static final Object START_COMMAND = "start";
 	
-	final BlockingQueue<SegmentContent> queue;
+	private final BlockingQueue<SegmentContent> queue;
+	private static final Map<String, Player> players = new ConcurrentHashMap<>();
+	
+	Player() {
+		this.queue = new ArrayBlockingQueue<>(MAX_SEGMENTS);
+	}
 	
 	static void processBrowserRequest(Socket cs, BiFunction<String, BlockingQueue<SegmentContent>, Runnable> factory) throws Exception {
 		InputStream is = cs.getInputStream();
@@ -64,8 +69,7 @@ class Player {
 		String request = Http.readLine(is);
 		System.err.println(request);
 
-		while (Http.readLine(is).length() > 0)
-			;
+		while (Http.readLine(is).length() > 0);
 
 		String path = Http.parseHttpRequest(request)[1];
 		String[] pathTokens = path.split("/");
@@ -78,35 +82,30 @@ class Player {
 
 		System.err.println( movie );
 
-		var player = players.get(playerId);
+		Player player = players.get(playerId);
+		
 		if (player == null && command.equals(START_COMMAND)) {
 			players.put(playerId, player = new Player());
 			new Thread(factory.apply(movie, player.queue)).start();
 		}
 		
-		var segment = player.queue.take();
-		var data = segment.data();
+		SegmentContent segment = player.queue.take();
+		byte[] data = segment.data();
 		
-		var sb = new StringBuffer(HTTP_OK)
-				.append( HTTP_CORS )
+		StringBuffer sb = new StringBuffer(HTTP_OK)
+				.append(HTTP_CORS)
 				.append(String.format(HTTP_CONTENT_TYPE_FMT, segment.contentType()))
 				.append(String.format(HTTP_CONTENT_LENGTH_FMT, data.length))
 				.append(CRLF);
 
-		System.err.println("REPLY:" + sb.toString());
+		System.err.println("REPLY: " + sb.toString());
 		
-		cs.getOutputStream().write( sb.toString().getBytes() );
-		cs.getOutputStream().write( data);	
+		cs.getOutputStream().write(sb.toString().getBytes());
+		cs.getOutputStream().write(data);
 		cs.close();
 		
-		if( data.length == 0)
+		if(data.length == 0)
 			players.remove( playerId );
 	}
-
-	Player() {
-		this.queue = new ArrayBlockingQueue<>(MAX_SEGMENTS);
-	}
-
-
-	private static Map<String, Player> players = new ConcurrentHashMap<>();
+	
 }
